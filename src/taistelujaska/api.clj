@@ -24,40 +24,40 @@
 
 (def url (partial build-url server-name))
 
-(defn alive []
+(defn alive! []
   (client/get (url "alive")))
 
-(defn- reset* [password]
+(defn- reset!* [password]
   (client/get (url "reset" {:pass password})))
 
-(def reset (partial reset* "salasana"))
+(def reset-game! (partial reset!* "salasana"))
 
-(defn turn-duration []
+(defn turn-duration! []
   (client/get (url "turn-duration")))
 
-(defn- board* [name]
-  (client/get (url "reset" {:name name})))
+(defn- board!* [name]
+  (client/get (url "board" {:name name})))
 
-(def board (partial board* player-name))
+(def board! (partial board!* player-name))
 
-(defn- next-board* [name]
+(defn- next-board!* [name]
   (client/get (url "next-board" {:name name})))
 
-(def next-board (partial next-board* player-name))
+(def next-board! (partial next-board!* player-name))
 
-(defn- add-player* [name password]
+(defn- add-player!* [name password]
   (client/get (url "add-player" {:name name
                                  :pass password})))
 
-(def add-player (partial add-player* player-name password))
+(def add-player! (partial add-player!* player-name password))
 
-(defn- player* [name password]
+(defn- player!* [name password]
   (client/get (url "player" {:name name
                              :pass password})))
 
-(def player (partial player* player-name password))
+(def player! (partial player!* player-name password))
 
-(defn- act* [name password action target]
+(defn- act!* [name password action target]
   (assert (#{:move :attack} action))
   (assert (#{:west :south :east :north nil} target))
   (client/get (url "act" {:name name
@@ -65,7 +65,7 @@
                           :action action
                           :target target})))
 
-(def act (partial act* player-name password))
+(def act! (partial act!* player-name password))
 
-(defn leaderboard []
+(defn leaderboard! []
   (client/get (url "leaderboard")))
