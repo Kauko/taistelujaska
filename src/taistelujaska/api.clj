@@ -2,7 +2,8 @@
   (:require [clj-http.client :as client]
             [clojure.string :as str]))
 
-(def server-name "http://localhost:8080/api/")
+(def ip "localhost" #_"192.168.1.71")
+(def server-name (str "http://" ip ":8080/api/"))
 
 (def player-name "taistelujaska")
 (def password "makkaroita")
@@ -27,8 +28,9 @@
 (defn alive! []
   (client/get (url "alive")))
 
-(defn- reset!* [password]
-  (client/get (url "reset" {:pass password})))
+(defn- reset!* [password level]
+  (client/get (url "reset" {:pass password
+                            :level level})))
 
 (def reset-game! (partial reset!* "salasana"))
 

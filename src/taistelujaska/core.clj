@@ -3,6 +3,7 @@
             [taistelujaska.pathing :as path]
             [clojure.string :as str]
             [clojure.core.async :refer [put! >! <! timeout chan go go-loop]]
+            [clojure.math.numeric-tower :as math]
             [astar.core :as astar]))
 
 (def player \@)
@@ -13,7 +14,7 @@
 (def other-player \P)
 (def spawn \:)
 
-(def traversable-cell-types #{enemy ground gold other-player spawn player})
+(def traversable-cell-types #{ground gold other-player spawn player})
 
 (defn traversable? [[coord char]]
   (traversable-cell-types char))
@@ -30,32 +31,35 @@
        (mapcat identity)
        (into {})))
 
+(defn corner? [[x y] [tx ty]]
+  (and (or (= tx (- x 1))
+           (= tx (+ x 1)))
+       (or (= ty (- y 1))
+           (= ty (+ y 1)))))
+
+(defn cells-next-to
+  ([cell] (cells-next-to cell nil))
+  ([[x y :as cell] board]
+   (let [width (when board (apply max (map first (keys board))))
+         height (when board (apply max (map second (keys board))))]
+     (for [tx (range (- x 1) (+ x 2))
+           ty (range (- y 1) (+ y 2))
+           :when (and (>= tx 0)
+                      (>= ty 0)
+                      (or (nil? width) (<= tx width))
+                      (or (nil? height) (<= ty height))
+                      (not= [x y] [tx ty])
+                      (or (nil? board) (traversable-cell-types (board [tx ty])))
+                      (not (corner? [x y] [tx ty])))]
+       [tx ty]))))
+
 (defn graph [board]
-  (let [width (apply max (map first (keys board)))
-        height (apply max (map second (keys board)))
-        traversable-cells (filter traversable? board)
-        corner? (fn [[x y] [tx ty]]
-                  (and (or (= tx (- x 1))
-                           (= tx (+ x 1)))
-                       (or (= ty (- y 1))
-                           (= ty (+ y 1)))))]
+  (let [traversable-cells (filter traversable? board)]
     (into {}
           (map
             (fn [[[x y :as cell] _]]
-              [cell (for [tx (range (- x 1) (+ x 2))
-                          ty (range (- y 1) (+ y 2))
-                          :when (and (>= tx 0)
-                                     (>= ty 0)
-                                     (<= tx width)
-                                     (<= ty height)
-                                     (not= [x y] [tx ty])
-                                     (traversable-cell-types (board [tx ty]))
-                                     (not (corner? [x y] [tx ty])))]
-                      [tx ty])])
+              [cell (cells-next-to cell board)])
             traversable-cells))))
-
-(defn distances [graph goal]
-  (into {} (map (fn [cell] [cell (path/manhattan-distance goal cell)]) (keys graph))))
 
 (defn indices-of [char board]
   (keys (filter (comp (partial = char) val) board)))
@@ -87,47 +91,86 @@
                                :else nil))
              (rest path)))))
 
-(def actions-ch (chan))
+(defn weights [enemy-positions]
+  (fn [from to]
+    (->> enemy-positions
+        (map (partial path/manhattan-distance to))
+        (map (partial / 50))
+        (reduce +))))
 
-(defn do-actions! [ms actions-ch]
-  (go-loop []
-    (let [a (<! actions-ch)]
-      (println "Executing " (pr-str a))
-      (apply api/act! a))
-    (<! (timeout ms))
-    (recur)))
+(def gold-spawns (atom #{}))
+(def gold-camps (atom []))
 
-(defn new-round! []
-  (api/reset-game!)
-  (api/add-player!))
+(defn save-gold-camps! [spawns]
+  (println "Calculating gold camps!")
+  (let [camps (remove spawns (mapcat cells-next-to spawns))
+        ranked (into
+                 {}
+                 (map
+                   (fn [camp]
+                     [camp (-> (reduce + (map (partial path/manhattan-distance camp) spawns))
+                               (math/expt 2))])
+                   camps))]
+    (reset! gold-camps ranked)))
 
-(defn aloita []
-  (let [board (board (:body (api/board!)))
-        turn-duration (Integer. (:body (api/turn-duration!)))]
+(add-watch gold-spawns ::gold-camps
+           (fn [_ _ old new]
+             (when-not (= old new) (save-gold-camps! new))))
+
+(defn save-gold-spawns! [locations]
+  (swap! gold-spawns #(apply conj % locations))
+  locations)
+
+(defn best-gold-camp []
+  (let [best-rank (apply min (vals @gold-camps))
+        best-camps (filter (comp (partial = best-rank) val) @gold-camps)]
+    (keys best-camps)))
+
+(defn actions []
+  (let [board (board (:body (api/board!)))]
     (when-let [player-position (player-pos board)]
-      (let [nearest-gold (->> (indices-of gold board)
-                              (nearest-goal player-position))
-            nearest-enemy (when-not nearest-gold
-                            (->> (indices-of enemy board)
-                                 (nearest-goal player-position)
-                                 (opposite-direction player-position)))
+      (let [nearest-gold (some->> (indices-of gold board)
+                                  save-gold-spawns!
+                                  (nearest-goal player-position))
+            nearest-gold-spawn (when-not nearest-gold
+                                 (some->> (best-gold-camp)
+                                          (nearest-goal player-position)))
+            goal (or nearest-gold nearest-gold-spawn)
             graph (graph board)
-            end-goal (or nearest-gold nearest-enemy)
             path (->> (astar/route graph
-                                   (constantly 1)
-                                   (distances graph nearest-gold)
+                                   (weights (indices-of enemy board))
+                                   (partial path/manhattan-distance goal)
                                    player-position
-                                   end-goal)
+                                   goal)
                       (cardinal-directions player-position))
             actions (->> path
                          (interleave (repeat :move))
                          (partition 2))]
-        (println "Travelling from " (pr-str player-position) " to " (pr-str end-goal))
-        (println "It takes " (count actions) " steps to get there")
-        (do-actions! (/ turn-duration 2) actions-ch)
-        (for [action actions]
-          (put! actions-ch action))))))
+        (when-not nearest-gold
+          (println "No gold found! Travelling to best camp."))
+        #_(println "Travelling from " (pr-str player-position) " to " (pr-str goal))
+        #_(println "It takes " (count actions) " steps to get there")
+        actions))))
+
+(defn do-actions! [ms]
+  (when-let [a (first (actions))]
+    #_(println "Executing " (pr-str a))
+    (apply api/act! a)
+    (Thread/sleep ms))
+  (recur ms))
+
+(defn aloita []
+  (let [ms (Integer. (:body (api/turn-duration!)))]
+    (do-actions! ms)))
+
+(defn new-round!
+  ([] (new-round! 0))
+  ([lvl]
+   (reset! gold-camps {})
+   (reset! gold-spawns #{})
+   (api/reset-game! lvl)
+   (api/add-player!)
+   (aloita)))
 
 (defn -main []
-  (new-round!)
-  (aloita))
+  (new-round!))
