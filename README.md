@@ -5,12 +5,18 @@ A simple bot for a game played over REST API. Was created in one night under tim
 ## Usage
 
 Clone https://github.com/aoh/luola
-cd luola
-lein run
-cd ..
+
+`cd luola`
+
+`lein run`
+
+`cd ..`
+
 Clone this repo
-cd taistelujaska
-lein run
+
+`cd taistelujaska`
+
+`lein run`
 
 ## License
 
